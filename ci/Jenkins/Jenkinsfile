@@ -7,7 +7,7 @@ pipeline {
   stages {
     stage('Checkout') {
       steps {
-        git branch: 'main', url: 'https://github.com/cabddiouf/devops-demo-project.gitfork'
+        git branch: 'main', url: 'https://github.com/cabddiouf/devops-demo-projectfork.git'
       }
     }
 
@@ -90,3 +90,4 @@ pipeline {
     }
   }
 }
+
