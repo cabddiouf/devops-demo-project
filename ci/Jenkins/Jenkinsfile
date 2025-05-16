@@ -1,3 +1,4 @@
+/*
 pipeline {
   agent any
   parameters {
@@ -28,7 +29,7 @@ pipeline {
     }
     stage('Build and Push Docker Image') {
       environment {
-        DOCKER_IMAGE = "abdelbakibouzaienne/demo-java-app:${build_version}"
+        DOCKER_IMAGE = "cabddiouf/demo-java-app:${build_version}"
         REGISTRY_CREDENTIALS = credentials('dockerhub')
       }
       steps {
@@ -58,6 +59,100 @@ pipeline {
                 '''
             }
         }
+    }
+  }
+}
+*/
+
+pipeline {
+  agent any
+  parameters {
+    string(name: 'build_version', defaultValue: 'V1.0', description: 'Build version to use for Docker image')
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        git branch: 'main', url: 'https://github.com/abdelbaki-bouzaienne/devops-demo-project.git'
+      }
+    }
+
+    stage('Build and Test') {
+      steps {
+        sh 'ls -ltr'
+        sh 'cd demo-java-app && mvn clean package'
+      }
+    }
+
+    stage('Wait for SonarQube') {
+      steps {
+        script {
+          def isReady = false
+          for (int i = 0; i < 30; i++) {
+            def response = sh(script: "curl -s http://sonarqube:9000/api/system/health | grep -o '\"status\":\"UP\"'", returnStatus: true)
+            if (response == 0) {
+              echo 'SonarQube is ready.'
+              isReady = true
+              break
+            }
+            echo 'Waiting for SonarQube...'
+            sleep 5
+          }
+          if (!isReady) {
+            error 'SonarQube did not start in time.'
+          }
+        }
+      }
+    }
+
+    stage('Static Code Analysis') {
+      environment {
+        SONAR_URL = "http://sonarqube:9000"
+      }
+      steps {
+        withCredentials([string(credentialsId: 'sonarqube', variable: 'SONAR_AUTH_TOKEN')]) {
+          sh 'cd demo-java-app && mvn sonar:sonar -Dsonar.login=$SONAR_AUTH_TOKEN -Dsonar.host.url=${SONAR_URL}'
+        }
+      }
+    }
+
+    stage('Build and Push Docker Image') {
+      steps {
+        withCredentials([usernamePassword(credentialsId: 'dockerhub', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+          script {
+            def imageName = "cabddiouf/demo-java-app"
+            def tag = "${params.build_version}"
+            def fullImageName = "${imageName}:${tag}"
+
+            sh """
+              cd demo-java-app
+              docker build -t ${fullImageName} .
+              echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+              docker push ${fullImageName}
+            """
+          }
+        }
+      }
+    }
+
+    stage('Update Deployment File') {
+      environment {
+        GIT_REPO_NAME = "devops-demo-project"
+        GIT_USER_NAME = "abdelbaki-bouzaienne"
+      }
+      steps {
+        withCredentials([string(credentialsId: 'github', variable: 'GITHUB_TOKEN')]) {
+          sh '''
+            git config user.email "abdelbaki.bouzaienne@gmail.com"
+            git config user.name "abdelbaki-bouzaienne"
+            sed -i "s|repository: .*|repository: cabddiouf/demo-java-app|" helm/app/values.yaml
+            sed -i "s/tag: .*/tag: \\"${build_version}\\"/" helm/app/values.yaml
+            git add helm/app/values.yaml
+            git commit -m "Update deployment image to version ${build_version}"
+            git push https://${GITHUB_TOKEN}@github.com/${GIT_USER_NAME}/${GIT_REPO_NAME} HEAD:main
+          '''
+        }
+      }
     }
   }
 }
